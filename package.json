@@ -10,8 +10,8 @@
     "node": ">=18"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
     "express": "^4.21.2",
-    "multer": "^2.4.0"
+    "multer": "^2.4.0",
+    "selfsigned": "^5.5.0"
   }
 }

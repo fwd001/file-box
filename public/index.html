@@ -162,6 +162,9 @@
     text-overflow: ellipsis; white-space: nowrap; }
   .folder-meta { font-size: 13px; color: var(--text2); margin-top: 1px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 500; color: var(--text2);
+    background: var(--fill); border-radius: 5px; padding: 1px 7px; margin-left: 4px;
+    vertical-align: 1px; -webkit-user-select: none; user-select: none; }
   .acts { display: flex; gap: 2px; flex-shrink: 0; }
   .linkbtn {
     flex-shrink: 0; border: none; background: transparent; color: var(--accent);
@@ -346,6 +349,7 @@
   </div>
 </div>
 
+<script src="crypto.js"></script>
 <script>
 const $ = (s) => document.querySelector(s);
 const fmtSize = (n) => {
@@ -357,6 +361,34 @@ const fmtSize = (n) => {
 const fmtTime = (name) => {
   const m = String(name).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : name;
+};
+// 相对时间 + 周几（从目录名解析）
+const relTag = (name) => {
+  const m = String(name).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+  if (!m) return '';
+  const t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+  const wd = '周' + '日一二三四五六'[new Date(t).getDay()];
+  const diff = Date.now() - t;
+  if (diff < 60000) return `${wd} · 刚刚`;
+  if (diff < 3600000) return `${wd} · ${Math.floor(diff / 60000)} 分钟前`;
+  if (diff < 86400000) return `${wd} · ${Math.floor(diff / 3600000)} 小时前`;
+  const d = Math.floor(diff / 86400000);
+  if (d < 7) return `${wd} · ${d} 天前`;
+  if (d < 30) return `${wd} · ${Math.floor(d / 7)} 周前`;
+  return `${wd} · ${Math.floor(d / 30)} 个月前`;
+};
+const te = new TextEncoder(), td = new TextDecoder();
+// 磁盘密文名（服务端只见这个）
+const randName = () => {
+  const b = crypto.getRandomValues(new Uint8Array(6));
+  return 'f_' + [...b].map((x) => x.toString(16).padStart(2, '0')).join('') + '.enc';
+};
+const saveBlob = (blob, name) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 };
 let toastTimer;
 function toast(msg) {
@@ -391,14 +423,30 @@ function setFiles(files) {
 }
 async function upload() {
   if (!selected.length) { toast('请先选择文件'); return; }
-  const fd = new FormData();
-  selected.forEach((f) => fd.append('files', f, f.name));
   const btn = $('#submit');
-  btn.disabled = true; btn.textContent = '上传中…';
+  btn.disabled = true; btn.textContent = '准备中…';
   const bar = $('#bar'); bar.style.display = 'block';
   bar.querySelector('div').style.width = '0%';
 
   try {
+    // 客户端加密（用户无感）：文件内容与文件名加密后才上传
+    const fd = new FormData();
+    const items = [];
+    for (let i = 0; i < selected.length; i++) {
+      const f = selected[i];
+      btn.textContent = `处理中 ${i + 1}/${selected.length}…`;
+      const encName = randName();
+      const blob = await FBCrypto.encryptFile(f, (p) => {
+        bar.querySelector('div').style.width = ((i + p / 100) / selected.length * 100) + '%';
+      });
+      fd.append('files', blob, encName);
+      items.push({ name: f.name, size: f.size, enc: encName });
+    }
+    // 加密清单（真实文件名映射）
+    const mf = await FBCrypto.encryptBytes(te.encode(JSON.stringify({ v: 1, files: items })));
+    fd.append('files', new Blob([mf]), 'manifest.enc');
+
+    btn.textContent = '上传中…';
     await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload');
@@ -429,6 +477,9 @@ $('#form').addEventListener('submit', (e) => { e.preventDefault(); upload(); });
 
 // ---------- 列表 ----------
 let overLimit = false;
+let lastList = null; // 服务端原始列表（密文名）
+const manifestCache = {}; // 目录 → 加密清单 Promise
+
 async function loadList() {
   const listBox = $('#list'), loading = $('#loading'), empty = $('#empty');
   listBox.innerHTML = ''; loading.style.display = 'block'; empty.style.display = 'none';
@@ -446,15 +497,16 @@ async function loadList() {
     $('#warn').style.display = overLimit ? 'block' : 'none';
     $('#retention-note').textContent = `超 ${u.retentionDays || 30} 天自动清理`;
     $('#submit').disabled = overLimit;
+    lastList = data;
     if (!data.folders.length) { empty.style.display = 'block'; return; }
     listBox.innerHTML = data.folders.map((f) => `
       <div class="folder" data-name="${esc(f.name)}">
-        <div class="folder-head" onclick="this.parentElement.classList.toggle('open')">
+        <div class="folder-head" onclick="toggleFolder(this.parentElement)">
           <span class="chev"><svg viewBox="0 0 8 13" fill="none" stroke="currentColor"
             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 1l5 5.5L2 12"/></svg></span>
           <div class="folder-main">
             <div class="folder-time">${esc(fmtTime(f.name))}</div>
-            <div class="folder-meta">${f.count} 个文件 · ${fmtSize(f.size)}</div>
+            <div class="folder-meta">${f.count} 个文件 · ${fmtSize(f.size)}<span class="tag">${esc(relTag(f.name))}</span></div>
           </div>
           <span class="acts" onclick="event.stopPropagation()">
             <button class="linkbtn" onclick="downZip('${enc(f.name)}')">打包下载</button>
@@ -467,13 +519,7 @@ async function loadList() {
             </svg>
           </button>
         </div>
-        <div class="folder-body">${f.files.map((x) => `
-          <div class="file-row">
-            <span class="name" title="${esc(x.name)}">${esc(x.name)}</span>
-            <span class="size">${fmtSize(x.size)}</span>
-            <a href="/api/download/${enc(f.name)}/${enc(x.name)}">下载</a>
-          </div>`).join('')}
-        </div>
+        <div class="folder-body"></div>
       </div>`).join('');
   } catch {
     loading.style.display = 'none';
@@ -484,15 +530,173 @@ async function loadList() {
     const el = [...listBox.querySelectorAll('.folder')].find((d) => d.dataset.name === shareFolder);
     if (el) {
       el.classList.add('open', 'highlight');
+      fillBody(el);
       setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     }
   }
 }
-function downZip(folder) {
-  const a = document.createElement('a');
-  a.href = `/api/download/${folder}`;
-  a.download = '';
-  a.click();
+
+// 展开/收起目录；首次展开时拉取加密清单，解密出真实文件名
+function toggleFolder(el) {
+  el.classList.toggle('open');
+  if (el.classList.contains('open')) fillBody(el);
+}
+async function fillBody(el) {
+  const body = el.querySelector('.folder-body');
+  if (body.dataset.filled) return;
+  body.dataset.filled = '1';
+  const folder = el.dataset.name;
+  const serverFiles = (lastList && lastList.folders.find((x) => x.name === folder) || { files: [] }).files;
+  body.innerHTML = '<div class="file-row"><span class="name" style="color:var(--text2)">加载中…</span></div>';
+  try {
+    const hasMf = serverFiles.some((x) => x.name === 'manifest.enc');
+    const m = hasMf ? await getManifest(folder) : null;
+    let rows;
+    if (m && m.files) {
+      // 加密目录：显示真实文件名，下载时解密
+      rows = m.files.map((f) => `
+        <div class="file-row">
+          <span class="name" title="${esc(f.name)}">${esc(f.name)}</span>
+          <span class="size">${fmtSize(f.size)}</span>
+          <a href="javascript:void(0)" class="dl" data-folder="${enc(folder)}" data-enc="${enc(f.enc)}" data-name="${esc(f.name)}">下载</a>
+        </div>`);
+    } else {
+      // 旧数据（未加密）：直接展示与下载
+      rows = serverFiles.filter((x) => x.name !== 'manifest.enc').map((x) => `
+        <div class="file-row">
+          <span class="name" title="${esc(x.name)}">${esc(x.name)}</span>
+          <span class="size">${fmtSize(x.size)}</span>
+          <a href="/api/download/${enc(folder)}/${enc(x.name)}">下载</a>
+        </div>`);
+    }
+    body.innerHTML = rows.join('') || '<div class="file-row"><span class="name" style="color:var(--text2)">空目录</span></div>';
+  } catch (e) {
+    body.innerHTML = '';
+    toast(e.message || '加载失败');
+  }
+}
+// 拉取并解密目录清单（真实文件名）
+function getManifest(folder) {
+  if (!manifestCache[folder]) {
+    manifestCache[folder] = fetch(`/api/download/${enc(folder)}/manifest.enc`)
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then(async (buf) => buf ? JSON.parse(td.decode(await FBCrypto.decryptBytes(new Uint8Array(buf)))) : null)
+      .catch(() => null);
+  }
+  return manifestCache[folder];
+}
+
+// ---------- 下载（自动解密） ----------
+async function fetchAndDecrypt(folder, encName) {
+  const r = await fetch(`/api/download/${enc(folder)}/${enc(encName)}`);
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error || '下载失败');
+  }
+  return FBCrypto.decryptStream(r.body);
+}
+// 单文件下载（事件委托，文件行里的「下载」）
+document.addEventListener('click', async (e) => {
+  const a = e.target.closest('a.dl');
+  if (!a) return;
+  e.preventDefault();
+  const name = a.dataset.name;
+  a.textContent = '下载中…';
+  try {
+    const blob = await fetchAndDecrypt(decodeURIComponent(a.dataset.folder), decodeURIComponent(a.dataset.enc));
+    saveBlob(blob, name);
+  } catch (err) {
+    toast(err.message || '下载失败');
+  } finally {
+    a.textContent = '下载';
+  }
+});
+
+// ---------- 前端 zip 打包（STORE 模式，不压缩） ----------
+const CRC_T = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xffffffff;
+  for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+async function buildZip(entries) {
+  const parts = [], central = [];
+  let offset = 0;
+  const d = new Date();
+  const dosTime = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | ((d.getSeconds() >> 1) & 31);
+  const dosDate = (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31);
+  for (const e of entries) {
+    if (e.blob.size > 0xffffff00) throw new Error('单个文件超 4GB，无法打包，请单独下载');
+    const nameB = te.encode(e.name);
+    const data = new Uint8Array(await e.blob.arrayBuffer());
+    const crc = crc32(data);
+    const lh = new Uint8Array(30 + nameB.length);
+    const v = new DataView(lh.buffer);
+    v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true);
+    v.setUint16(8, 0, true); v.setUint16(10, dosTime, true); v.setUint16(12, dosDate, true);
+    v.setUint32(14, crc, true); v.setUint32(18, data.length, true); v.setUint32(22, data.length, true);
+    v.setUint16(26, nameB.length, true); v.setUint16(28, 0, true);
+    lh.set(nameB, 30);
+    parts.push(lh, data);
+    const cd = new Uint8Array(46 + nameB.length);
+    const c = new DataView(cd.buffer);
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
+    c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, dosTime, true); c.setUint16(14, dosDate, true);
+    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
+    c.setUint16(28, nameB.length, true); c.setUint32(42, offset, true);
+    cd.set(nameB, 46);
+    central.push(cd);
+    offset += lh.length + data.length;
+    if (offset > 0xffffff00) throw new Error('内容过大（超 4GB），请逐个下载');
+  }
+  const cdSize = central.reduce((s, x) => s + x.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, eocd], { type: 'application/zip' });
+}
+let zipping = false; // 防止打包期间重复点击
+async function downZip(nameEnc) {
+  if (zipping) { toast('正在打包中，请稍候'); return; }
+  zipping = true;
+  const folder = decodeURIComponent(nameEnc);
+  toast('打包中…');
+  try {
+    const m = await getManifest(folder);
+    const entries = [];
+    if (m && m.files) {
+      for (let i = 0; i < m.files.length; i++) {
+        const f = m.files[i];
+        entries.push({ name: f.name, blob: await fetchAndDecrypt(folder, f.enc) });
+        if (m.files.length > 1) toast(`打包中 ${i + 1}/${m.files.length}`);
+      }
+    } else {
+      // 旧数据：直接取文件打包
+      const sf = (lastList && lastList.folders.find((x) => x.name === folder) || { files: [] }).files;
+      for (const x of sf.filter((y) => y.name !== 'manifest.enc')) {
+        const r = await fetch(`/api/download/${enc(folder)}/${enc(x.name)}`);
+        if (!r.ok) throw new Error('下载失败');
+        entries.push({ name: x.name, blob: await r.blob() });
+      }
+    }
+    if (!entries.length) { toast('目录为空'); return; }
+    saveBlob(await buildZip(entries), `${folder}.zip`);
+    toast('已下载');
+  } catch (e) {
+    toast(e.message || '打包失败');
+  } finally {
+    zipping = false;
+  }
 }
 
 // ---------- 删除（iOS 弹层确认） ----------
@@ -520,6 +724,7 @@ function delFolder(name) {
         const r = await fetch(`/api/folder/${name}`, { method: 'DELETE' });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || '删除失败');
+        delete manifestCache[folder];
         toast('已删除');
         loadList();
       } catch (e) {

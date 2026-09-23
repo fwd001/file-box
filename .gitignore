@@ -4,6 +4,9 @@ node_modules/
 # 上传数据（按需备份，不入库）
 uploads/
 
+# 自签证书（每台服务器独立生成）
+.certs/
+
 # 日志与临时文件
 *.log
 *.pid

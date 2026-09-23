@@ -1,24 +1,50 @@
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const express = require('express');
 const multer = require('multer');
-const archiver = require('archiver');
+const selfsigned = require('selfsigned');
 
 const app = express();
 
 // ---- 配置（均可通过环境变量覆盖） ----
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3000;              // HTTP 端口（完整服务）
+const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 3443;   // HTTPS 端口（传输层加密 + 原生加密引擎）
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const STORAGE_LIMIT_GB = Number(process.env.STORAGE_LIMIT_GB) || 10; // 存储总量上限
 const RETENTION_DAYS = Number(process.env.RETENTION_DAYS) || 30;      // 超过 N 天的目录自动清理
 const STORAGE_LIMIT = STORAGE_LIMIT_GB * 1024 * 1024 * 1024;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
+// 加密清单文件名（前端生成；列表计数时排除）
+const MANIFEST = 'manifest.enc';
+
 // ---- 基础目录（不存在会自动创建） ----
 function ensureUploadDir() {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 ensureUploadDir();
+
+// ---- 自签证书（首次启动自动生成，存入 .certs/，之后复用） ----
+async function ensureCert() {
+  const dir = path.join(__dirname, '.certs');
+  const keyPath = path.join(dir, 'key.pem');
+  const certPath = path.join(dir, 'cert.pem');
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const pems = await selfsigned.generate([{ name: 'commonName', value: 'file-box' }], {
+    days: 3650,
+    keySize: 2048,
+    algorithm: 'sha256',
+  });
+  fs.writeFileSync(keyPath, pems.private);
+  fs.writeFileSync(certPath, pems.cert);
+  console.log('[证书] 已自动生成自签证书（.certs/），浏览器首次访问需手动信任一次');
+  return { key: pems.private, cert: pems.cert };
+}
 
 // ---- 工具函数 ----
 /** 生成文件夹名：日期+时间，精确到分钟，如 20260923_1430 */
@@ -104,7 +130,7 @@ function cleanupExpired() {
 cleanupExpired();
 setInterval(cleanupExpired, 6 * 60 * 60 * 1000).unref();
 
-// ---- 上传（multer 2.x，按批次存进当次新建的目录） ----
+// ---- 上传（multer 2.x，按批次存进当次新建的目录；文件内容已由前端端到端加密） ----
 const storage = multer.diskStorage({
   destination(req, file, cb) {
     try {
@@ -147,6 +173,7 @@ app.post(
 );
 
 // ---- 文件列表（按时间倒序：新的在前） ----
+// 文件名/大小来自磁盘（密文名）；真实文件名在前端解密 manifest.enc 后还原
 app.get('/api/list', (req, res) => {
   ensureUploadDir();
   const folders = fs
@@ -160,7 +187,7 @@ app.get('/api/list', (req, res) => {
         .sort((a, b) => a.name.localeCompare(b.name));
       return {
         name: d.name,
-        count: files.length,
+        count: files.filter((f) => f.name !== MANIFEST).length,
         size: files.reduce((s, f) => s + f.size, 0),
         files,
       };
@@ -170,6 +197,7 @@ app.get('/api/list', (req, res) => {
   res.json({
     folders,
     usage: { used, limit: STORAGE_LIMIT, limitGB: STORAGE_LIMIT_GB, retentionDays: RETENTION_DAYS },
+    httpsPort: HTTPS_PORT,
   });
 });
 
@@ -188,26 +216,7 @@ app.delete('/api/folder/:folder', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- 下载整个目录（zip） ----
-app.get('/api/download/:folder', (req, res) => {
-  const folder = safeName(req.params.folder);
-  if (!folder) return res.status(400).json({ error: '目录名无效' });
-  const dir = path.join(UPLOAD_DIR, folder);
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-    return res.status(404).json({ error: '目录不存在' });
-  }
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${encodeURIComponent(folder)}.zip"`
-  );
-  const archive = archiver('zip', { zlib: { level: 0 } });
-  archive.on('error', () => res.status(500).end());
-  archive.pipe(res);
-  archive.directory(dir, false);
-  archive.finalize();
-});
-
-// ---- 下载单个文件 ----
+// ---- 下载单个文件（密文，前端收到后自动解密） ----
 app.get('/api/download/:folder/:file', (req, res) => {
   const folder = safeName(req.params.folder);
   const file = safeName(req.params.file);
@@ -235,7 +244,15 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: msg });
 });
 
-app.listen(PORT, () => {
-  console.log(`file-box 已启动: http://localhost:${PORT}`);
-  console.log(`上传目录: ${UPLOAD_DIR}（存储上限 ${STORAGE_LIMIT_GB}GB，超过 ${RETENTION_DAYS} 天自动清理）`);
-});
+// ---- 双端口启动：HTTP 可直接用；HTTPS 更优（传输层加密 + 原生加密引擎） ----
+(async () => {
+  const cert = await ensureCert();
+  https.createServer(cert, app).listen(HTTPS_PORT, () => {
+    console.log(`file-box 已启动`);
+    console.log(`  HTTP : http://localhost:${PORT}`);
+    console.log(`  HTTPS: https://localhost:${HTTPS_PORT}（推荐，首次访问需信任自签证书一次）`);
+    console.log(`上传目录: ${UPLOAD_DIR}（存储上限 ${STORAGE_LIMIT_GB}GB，超过 ${RETENTION_DAYS} 天自动清理）`);
+    console.log('文件在浏览器内端到端加密后上传，服务器磁盘只保存密文');
+  });
+  http.createServer(app).listen(PORT);
+})();
