@@ -340,12 +340,9 @@
 
 <div class="sheet-overlay" id="sheet">
   <div class="sheet">
-    <div class="sheet-title" id="sheet-title">删除该目录？</div>
+    <div class="sheet-title" id="sheet-title"></div>
     <div class="sheet-msg" id="sheet-msg"></div>
-    <div class="sheet-group">
-      <button class="sheet-del" id="sheet-del">删除</button>
-      <button class="sheet-cancel" id="sheet-cancel">取消</button>
-    </div>
+    <div class="sheet-group"></div>
   </div>
 </div>
 
@@ -386,7 +383,7 @@ const randName = () => {
 const saveBlob = (blob, name) => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = name;
+  a.download = name.replace(/[/\\]/g, '_'); // download 属性不支持路径分隔符
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 };
@@ -405,8 +402,31 @@ const enc = encodeURIComponent;
 // ---------- 上传 ----------
 const drop = $('#drop'), input = $('#input');
 let selected = [];
+// 记录文件时优先用相对路径（选择文件夹上传时保留目录结构）
+const relPath = (f) => f.webkitRelativePath || f.name;
 
-drop.addEventListener('click', () => input.click());
+// 触屏设备：点击选择区先弹「照片图库 / 选择文件 / 选择文件夹」；桌面直接打开文件对话框
+const isCoarse = matchMedia('(pointer: coarse)').matches;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+drop.addEventListener('click', () => {
+  if (!isCoarse) { pickFiles('file'); return; }
+  const actions = [
+    { label: '照片图库', onClick: () => pickFiles('media') },
+    { label: '选择文件', onClick: () => pickFiles('file') },
+  ];
+  if (!isIOS) actions.push({ label: '选择文件夹', onClick: () => pickFiles('dir') });
+  actions.push({ label: '取消', class: 'sheet-cancel' });
+  actionSheet({ title: '选择上传内容', actions });
+});
+function pickFiles(kind) {
+  input.removeAttribute('webkitdirectory');
+  input.removeAttribute('accept');
+  if (kind === 'media') input.accept = 'image/*,video/*';
+  else if (kind === 'dir') input.setAttribute('webkitdirectory', '');
+  input.click();
+}
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
 drop.addEventListener('drop', (e) => {
@@ -418,7 +438,7 @@ function setFiles(files) {
   selected = Array.from(files);
   $('#submit').textContent = `开始上传（${selected.length} 个文件）`;
   $('#file-list').innerHTML = selected
-    .map((f) => `<div class="row"><span>${esc(f.name)}</span><b>${fmtSize(f.size)}</b></div>`)
+    .map((f) => `<div class="row"><span title="${esc(relPath(f))}">${esc(relPath(f))}</span><b>${fmtSize(f.size)}</b></div>`)
     .join('');
 }
 async function upload() {
@@ -440,7 +460,7 @@ async function upload() {
         bar.querySelector('div').style.width = ((i + p / 100) / selected.length * 100) + '%';
       });
       fd.append('files', blob, encName);
-      items.push({ name: f.name, size: f.size, enc: encName });
+      items.push({ name: relPath(f), size: f.size, enc: encName });
     }
     // 加密清单（真实文件名映射）
     const mf = await FBCrypto.encryptBytes(te.encode(JSON.stringify({ v: 1, files: items })));
@@ -699,40 +719,52 @@ async function downZip(nameEnc) {
   }
 }
 
-// ---------- 删除（iOS 弹层确认） ----------
-let sheetCb = null;
+// ---------- 通用 iOS 弹层（动作列表 / 确认） ----------
 const sheet = $('#sheet');
-function showSheet({ title, msg, action, onConfirm }) {
+function actionSheet({ title = '', msg = '', actions = [] }) {
   $('#sheet-title').textContent = title;
   $('#sheet-msg').textContent = msg;
-  $('#sheet-del').textContent = action;
-  sheetCb = onConfirm;
+  const group = sheet.querySelector('.sheet-group');
+  group.innerHTML = '';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.textContent = a.label;
+    if (a.class) b.className = a.class;
+    b.addEventListener('click', () => { closeSheet(); a.onClick && a.onClick(); });
+    group.appendChild(b);
+  }
   sheet.classList.add('show');
 }
-function closeSheet() { sheet.classList.remove('show'); sheetCb = null; }
-$('#sheet-del').addEventListener('click', () => { const cb = sheetCb; closeSheet(); cb && cb(); });
-$('#sheet-cancel').addEventListener('click', closeSheet);
+function closeSheet() { sheet.classList.remove('show'); }
 sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheet(); });
+
+// ---------- 删除（确认弹层） ----------
 function delFolder(name) {
   const folder = decodeURIComponent(name);
-  showSheet({
+  actionSheet({
     title: '删除该目录？',
     msg: `“${fmtTime(folder)}”目录及其中所有文件将被永久删除，此操作无法撤销。`,
-    action: '删除',
-    onConfirm: async () => {
-      try {
-        const r = await fetch(`/api/folder/${name}`, { method: 'DELETE' });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.error || '删除失败');
-        delete manifestCache[folder];
-        toast('已删除');
-        loadList();
-      } catch (e) {
-        // 目录已被清掉（自动清理 / 手动删除等）时，刷新列表移除幽灵行
-        toast(e.message);
-        loadList();
-      }
-    },
+    actions: [
+      {
+        label: '删除',
+        class: 'sheet-del',
+        onClick: async () => {
+          try {
+            const r = await fetch(`/api/folder/${name}`, { method: 'DELETE' });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.error || '删除失败');
+            delete manifestCache[folder];
+            toast('已删除');
+            loadList();
+          } catch (e) {
+            // 目录已被清掉（自动清理 / 手动删除等）时，刷新列表移除幽灵行
+            toast(e.message);
+            loadList();
+          }
+        },
+      },
+      { label: '取消', class: 'sheet-cancel' },
+    ],
   });
 }
 
