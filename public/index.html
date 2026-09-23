@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F2F2F7">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>文件盒子</title>
+<style>
+  /* ---------- iOS 系统颜色（Apple HIG） ---------- */
+  :root {
+    --bg: #F2F2F7;                      /* systemGroupedBackground */
+    --card: #FFFFFF;                    /* secondarySystemGroupedBackground */
+    --hdr: rgba(242,242,247,.82);
+    --text: #1C1C1E;                    /* label */
+    --text2: rgba(60,60,67,.6);         /* secondaryLabel */
+    --text3: rgba(60,60,67,.32);        /* tertiaryLabel */
+    --accent: #007AFF;                  /* systemBlue */
+    --red: #FF3B30;                     /* systemRed */
+    --sep: rgba(60,60,67,.29);          /* separator */
+    --fill: rgba(120,120,128,.12);      /* systemFill */
+    --ok: #34C759;                      /* systemGreen */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1C1C1E;
+      --hdr: rgba(0,0,0,.72);
+      --text: #FFFFFF;
+      --text2: rgba(235,235,245,.6);
+      --text3: rgba(235,235,245,.32);
+      --accent: #0A84FF;
+      --red: #FF453A;
+      --sep: rgba(84,84,88,.6);
+      --fill: rgba(120,120,128,.24);
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro SC",
+      "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1.4;
+    min-height: 100svh;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
+    transition: background-color .3s;
+  }
+
+  /* ---------- 顶部大标题（毛玻璃） ---------- */
+  header {
+    position: sticky; top: 0; z-index: 60;
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: calc(14px + env(safe-area-inset-top)) 20px 8px;
+    background: var(--hdr);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  header h1 {
+    font-size: 34px; font-weight: 700; letter-spacing: -0.4px;
+  }
+  header button.refresh {
+    border: none; background: transparent; color: var(--accent);
+    font-size: 17px; font-weight: 500; cursor: pointer;
+    padding: 8px 2px; border-radius: 8px; -webkit-user-select: none; user-select: none;
+  }
+  header button.refresh:active { opacity: .4; }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 6px 16px 40px;
+    padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+
+  /* ---------- 分段标题（iOS 样式） ---------- */
+  .sec {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: .4px;
+    margin: 24px 20px 7px;
+  }
+  .sec .sec-note { font-size: 12px; font-weight: 400; color: var(--text3); text-transform: none; letter-spacing: 0; }
+
+  /* ---------- 分组面板 ---------- */
+  .panel {
+    background: var(--card); border-radius: 12px; overflow: hidden;
+  }
+
+  /* ---------- 上传 ---------- */
+  .upload-pad { padding: 16px; }
+  #drop {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 26px 16px; border-radius: 10px; cursor: pointer;
+    background: var(--bg); border: 1.5px dashed var(--sep);
+    transition: border-color .2s, background .2s;
+    -webkit-user-select: none; user-select: none;
+  }
+  #drop.drag { border-color: var(--accent); background: var(--fill); }
+  #drop svg { width: 34px; height: 34px; color: var(--accent); margin-bottom: 6px; }
+  #drop .big { font-size: 17px; font-weight: 500; }
+  #drop .sub { font-size: 13px; color: var(--text2); }
+  #drop .sub .accent { color: var(--accent); font-weight: 500; }
+
+  #file-list { max-height: 150px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #file-list .row {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 9px 0; border-bottom: 0.5px solid var(--sep);
+    font-size: 15px; color: var(--text);
+  }
+  #file-list .row:last-child { border-bottom: none; }
+  #file-list .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #file-list .row b { font-weight: 400; color: var(--text2); flex-shrink: 0; }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--fill);
+    margin-top: 14px; overflow: hidden; display: none; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent);
+    border-radius: 3px; transition: width .15s linear; }
+
+  .btn {
+    display: block; width: 100%; border: none; cursor: pointer;
+    font: inherit; font-size: 17px; font-weight: 600;
+    height: 50px; border-radius: 12px; margin-top: 14px;
+    -webkit-user-select: none; user-select: none;
+    transition: opacity .15s; touch-action: manipulation;
+  }
+  .btn:disabled { opacity: .4; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:active:not(:disabled) { opacity: .6; }
+
+  /* ---------- 文件列表 ---------- */
+  #loading { text-align: center; padding: 30px 0 26px; color: var(--text2);
+    font-size: 13px; }
+  .spinner { width: 20px; height: 20px; margin: 0 auto 8px; border-radius: 50%;
+    border: 2.5px solid var(--fill); border-top-color: var(--accent);
+    animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #empty { text-align: center; padding: 30px 0 26px; color: var(--text2); font-size: 15px; }
+
+  .folder { }
+  .folder-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 13px 16px; cursor: pointer;
+    -webkit-user-select: none; user-select: none;
+  }
+  .folder-head:active { background: var(--fill); }
+  .folder:not(:last-child) .folder-head { border-bottom: 0.5px solid var(--sep); }
+  .folder-head .chev {
+    flex-shrink: 0; width: 8px; height: 13px; color: var(--text3);
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 6px;
+  }
+  .folder-head .chev svg { width: 8px; height: 13px; }
+  .folder.open .chev { transform: rotate(90deg); }
+  .folder-head .chev { transition: transform .28s cubic-bezier(.32,.72,0,1); }
+  .folder-main { flex: 1; min-width: 0; padding-top: 2px; }
+  .folder-time { font-size: 17px; font-weight: 500; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .folder-meta { font-size: 13px; color: var(--text2); margin-top: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acts { display: flex; gap: 2px; flex-shrink: 0; }
+  .linkbtn {
+    flex-shrink: 0; border: none; background: transparent; color: var(--accent);
+    font: inherit; font-size: 15px; font-weight: 500; cursor: pointer;
+    padding: 8px 6px; border-radius: 8px; -webkit-user-select: none; user-select: none;
+    touch-action: manipulation;
+  }
+  .linkbtn:active { opacity: .4; }
+  .del {
+    flex-shrink: 0; border: none; background: transparent; color: var(--red);
+    width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+    cursor: pointer; border-radius: 8px; -webkit-user-select: none; user-select: none;
+    touch-action: manipulation; margin-left: 2px;
+  }
+  .del svg { width: 20px; height: 20px; }
+  .del:active { opacity: .4; }
+
+  .folder-body { display: none; }
+
+  .file-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px 12px 34px; font-size: 15px;
+    border-top: 0.5px solid var(--sep);
+  }
+  .file-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .file-row .size { color: var(--text2); font-size: 13px; flex-shrink: 0; }
+  .file-row a {
+    color: var(--accent); text-decoration: none; font-size: 15px; font-weight: 500;
+    flex-shrink: 0; padding: 6px 4px; border-radius: 8px;
+    -webkit-user-select: none; user-select: none;
+  }
+  .file-row a:active { opacity: .4; }
+
+  .folder.open .folder-body { display: block; }
+
+  .folder.highlight .folder-head { background: var(--fill); }
+
+  /* ---------- 存储用量 ---------- */
+  .usage { margin-top: 12px; }
+  .usage-bar { height: 5px; border-radius: 3px; background: var(--fill); overflow: hidden; }
+  .usage-bar > div { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .3s; }
+  .usage-text { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 12px; color: var(--text2); }
+  .usage.warn .usage-bar > div { background: var(--red); }
+  .usage.warn .usage-text { color: var(--red); font-weight: 500; }
+  .warn {
+    margin-top: 10px; border-radius: 10px; padding: 10px 12px;
+    background: rgba(255,59,48,.12); color: var(--red); font-size: 13px; line-height: 1.5;
+  }
+
+  /* ---------- 地址分享 ---------- */
+  .share-pad { padding: 16px; }
+  .share-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border-radius: 10px; padding: 5px 6px 5px 14px;
+  }
+  .share-row .url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 15px; color: var(--text); user-select: text;
+    -webkit-user-select: text; -webkit-touch-callout: default; }
+  .copy-btn {
+    flex-shrink: 0; border: none; background: var(--accent); color: #fff;
+    font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+    padding: 9px 18px; border-radius: 9px;
+    -webkit-user-select: none; user-select: none; touch-action: manipulation;
+  }
+  .copy-btn:active { opacity: .6; }
+  .share-hint { font-size: 12px; color: var(--text2); margin-top: 10px; line-height: 1.5; }
+
+  /* ---------- Toast ---------- */
+  #toast {
+    position: fixed; left: 50%; top: calc(12px + env(safe-area-inset-top));
+    transform: translateX(-50%) translateY(-80px);
+    background: rgba(28,28,30,.88); color: #fff; padding: 10px 18px; border-radius: 13px;
+    font-size: 14px; max-width: 86vw; text-align: center; z-index: 200;
+    box-shadow: 0 12px 32px rgba(0,0,0,.28);
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    opacity: 0; transition: transform .32s cubic-bezier(.32,.72,0,1), opacity .25s;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---------- 删除确认（iOS 弹层） ---------- */
+  .sheet-overlay {
+    position: fixed; inset: 0; z-index: 300; display: flex; align-items: flex-end;
+    justify-content: center; background: rgba(0,0,0,.4);
+    opacity: 0; pointer-events: none; transition: opacity .28s;
+  }
+  .sheet-overlay.show { opacity: 1; pointer-events: auto; }
+  .sheet {
+    width: 100%; max-width: 440px; background: var(--card);
+    border-radius: 16px; padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    transform: translateY(40px); opacity: 0;
+    transition: transform .34s cubic-bezier(.32,.72,0,1), opacity .24s;
+  }
+  .sheet-overlay.show .sheet { transform: translateY(0); opacity: 1; }
+  .sheet-title { font-size: 17px; font-weight: 600; text-align: center; }
+  .sheet-msg { font-size: 13px; color: var(--text2); text-align: center; margin-top: 6px; line-height: 1.5; }
+  .sheet-group { border-radius: 12px; overflow: hidden; margin-top: 16px; background: var(--bg); }
+  .sheet-group button {
+    display: block; width: 100%; height: 48px; border: none; background: transparent;
+    font: inherit; font-size: 17px; cursor: pointer;
+    -webkit-user-select: none; user-select: none; touch-action: manipulation;
+  }
+  .sheet-group button + button { border-top: 0.5px solid var(--sep); }
+  .sheet-group button:active { background: var(--fill); }
+  .sheet-del { color: var(--red); font-weight: 600; }
+  .sheet-cancel { color: var(--accent); font-weight: 500; }
+  @media (min-width: 480px) {
+    .sheet-overlay { align-items: center; }
+  }
+
+  @media (max-width: 480px) {
+    header { padding-left: 16px; padding-right: 16px; }
+    header h1 { font-size: 30px; }
+    .wrap { padding-left: 12px; padding-right: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>文件盒子</h1>
+  <button class="refresh" onclick="loadList()">刷新</button>
+</header>
+
+<div class="wrap">
+  <div class="sec">上传文件</div>
+  <section class="panel">
+    <div class="upload-pad">
+      <form id="form">
+        <div id="drop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20V8"/>
+            <path d="M6 14l6-6 6 6"/>
+            <path d="M4 20h16"/>
+          </svg>
+          <div class="big">点击选择文件</div>
+          <div class="sub">支持一次选择 <span class="accent">多个文件</span> 批量上传</div>
+        </div>
+        <input type="file" id="input" multiple hidden>
+        <div id="file-list"></div>
+        <div class="bar" id="bar"><div></div></div>
+        <button type="submit" class="btn btn-primary" id="submit">开始上传（0 个文件）</button>
+        <div class="usage" id="usage">
+          <div class="usage-bar"><div id="usage-fill"></div></div>
+          <div class="usage-text"><span id="usage-used"></span><span id="usage-limit"></span></div>
+        </div>
+        <div class="warn" id="warn" style="display:none">存储空间已达上限，上传已暂停。请删除无用文件释放空间。</div>
+      </form>
+    </div>
+  </section>
+
+  <div class="sec"><span>文件列表</span><span class="sec-note" id="retention-note">超 30 天自动清理</span></div>
+  <section class="panel">
+    <div id="loading"><div class="spinner"></div>加载中…</div>
+    <div id="list"></div>
+    <div id="empty" style="display:none">暂无文件</div>
+  </section>
+
+  <div class="sec">地址分享</div>
+  <section class="panel">
+    <div class="share-pad">
+      <div class="share-row">
+        <span class="url" id="site-url"></span>
+        <button class="copy-btn" onclick="copySite()">复制</button>
+      </div>
+      <div class="share-hint">每个目录行都有「复制链接」按钮，复制后发给他人，打开链接会自动展开并定位到该目录。</div>
+    </div>
+  </section>
+</div>
+
+<div id="toast"></div>
+
+<div class="sheet-overlay" id="sheet">
+  <div class="sheet">
+    <div class="sheet-title" id="sheet-title">删除该目录？</div>
+    <div class="sheet-msg" id="sheet-msg"></div>
+    <div class="sheet-group">
+      <button class="sheet-del" id="sheet-del">删除</button>
+      <button class="sheet-cancel" id="sheet-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const fmtSize = (n) => {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+};
+const fmtTime = (name) => {
+  const m = String(name).match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : name;
+};
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const enc = encodeURIComponent;
+
+// ---------- 上传 ----------
+const drop = $('#drop'), input = $('#input');
+let selected = [];
+
+drop.addEventListener('click', () => input.click());
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+drop.addEventListener('drop', (e) => {
+  e.preventDefault(); drop.classList.remove('drag');
+  setFiles(e.dataTransfer.files);
+});
+input.addEventListener('change', () => setFiles(input.files));
+function setFiles(files) {
+  selected = Array.from(files);
+  $('#submit').textContent = `开始上传（${selected.length} 个文件）`;
+  $('#file-list').innerHTML = selected
+    .map((f) => `<div class="row"><span>${esc(f.name)}</span><b>${fmtSize(f.size)}</b></div>`)
+    .join('');
+}
+async function upload() {
+  if (!selected.length) { toast('请先选择文件'); return; }
+  const fd = new FormData();
+  selected.forEach((f) => fd.append('files', f, f.name));
+  const btn = $('#submit');
+  btn.disabled = true; btn.textContent = '上传中…';
+  const bar = $('#bar'); bar.style.display = 'block';
+  bar.querySelector('div').style.width = '0%';
+
+  try {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload');
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) bar.querySelector('div').style.width = (e.loaded / e.total) * 100 + '%';
+      };
+      xhr.onload = () => {
+        try {
+          const r = JSON.parse(xhr.responseText);
+          xhr.status === 200 ? resolve(r) : reject(new Error(r.error || '上传失败'));
+        } catch { reject(new Error('上传失败')); }
+      };
+      xhr.onerror = () => reject(new Error('网络错误'));
+      xhr.send(fd);
+    });
+    toast('上传成功');
+    setFiles([]); input.value = '';
+    loadList();
+  } catch (e) {
+    toast(e.message);
+    if (/上限/.test(e.message)) loadList();
+  } finally {
+    btn.disabled = overLimit; btn.textContent = '开始上传（0 个文件）';
+    setTimeout(() => { bar.style.display = 'none'; }, 300);
+  }
+}
+$('#form').addEventListener('submit', (e) => { e.preventDefault(); upload(); });
+
+// ---------- 列表 ----------
+let overLimit = false;
+async function loadList() {
+  const listBox = $('#list'), loading = $('#loading'), empty = $('#empty');
+  listBox.innerHTML = ''; loading.style.display = 'block'; empty.style.display = 'none';
+  try {
+    const r = await fetch('/api/list');
+    const data = await r.json();
+    loading.style.display = 'none';
+    // 存储用量（旧版后端可能无 usage 字段，兜底避免列表不渲染）
+    const u = data.usage || { used: 0, limit: 1, limitGB: 10, retentionDays: 30 };
+    overLimit = u.used >= u.limit;
+    $('#usage-fill').style.width = Math.min(100, (u.used / u.limit) * 100) + '%';
+    $('#usage-used').textContent = `已用 ${fmtSize(u.used)}`;
+    $('#usage-limit').textContent = `上限 ${u.limitGB} GB`;
+    $('#usage').classList.toggle('warn', overLimit);
+    $('#warn').style.display = overLimit ? 'block' : 'none';
+    $('#retention-note').textContent = `超 ${u.retentionDays || 30} 天自动清理`;
+    $('#submit').disabled = overLimit;
+    if (!data.folders.length) { empty.style.display = 'block'; return; }
+    listBox.innerHTML = data.folders.map((f) => `
+      <div class="folder" data-name="${esc(f.name)}">
+        <div class="folder-head" onclick="this.parentElement.classList.toggle('open')">
+          <span class="chev"><svg viewBox="0 0 8 13" fill="none" stroke="currentColor"
+            stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 1l5 5.5L2 12"/></svg></span>
+          <div class="folder-main">
+            <div class="folder-time">${esc(fmtTime(f.name))}</div>
+            <div class="folder-meta">${f.count} 个文件 · ${fmtSize(f.size)}</div>
+          </div>
+          <span class="acts" onclick="event.stopPropagation()">
+            <button class="linkbtn" onclick="downZip('${enc(f.name)}')">打包下载</button>
+            <button class="linkbtn" onclick="copyFolder('${enc(f.name)}')">复制链接</button>
+          </span>
+          <button class="del" title="删除" onclick="event.stopPropagation();delFolder('${enc(f.name)}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>
+            </svg>
+          </button>
+        </div>
+        <div class="folder-body">${f.files.map((x) => `
+          <div class="file-row">
+            <span class="name" title="${esc(x.name)}">${esc(x.name)}</span>
+            <span class="size">${fmtSize(x.size)}</span>
+            <a href="/api/download/${enc(f.name)}/${enc(x.name)}">下载</a>
+          </div>`).join('')}
+        </div>
+      </div>`).join('');
+  } catch {
+    loading.style.display = 'none';
+    toast('加载失败');
+  }
+  // 通过 ?folder=xxx 分享链接进入：展开该目录并滚动到可见位置
+  if (shareFolder) {
+    const el = [...listBox.querySelectorAll('.folder')].find((d) => d.dataset.name === shareFolder);
+    if (el) {
+      el.classList.add('open', 'highlight');
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    }
+  }
+}
+function downZip(folder) {
+  const a = document.createElement('a');
+  a.href = `/api/download/${folder}`;
+  a.download = '';
+  a.click();
+}
+
+// ---------- 删除（iOS 弹层确认） ----------
+let sheetCb = null;
+const sheet = $('#sheet');
+function showSheet({ title, msg, action, onConfirm }) {
+  $('#sheet-title').textContent = title;
+  $('#sheet-msg').textContent = msg;
+  $('#sheet-del').textContent = action;
+  sheetCb = onConfirm;
+  sheet.classList.add('show');
+}
+function closeSheet() { sheet.classList.remove('show'); sheetCb = null; }
+$('#sheet-del').addEventListener('click', () => { const cb = sheetCb; closeSheet(); cb && cb(); });
+$('#sheet-cancel').addEventListener('click', closeSheet);
+sheet.addEventListener('click', (e) => { if (e.target === sheet) closeSheet(); });
+function delFolder(name) {
+  const folder = decodeURIComponent(name);
+  showSheet({
+    title: '删除该目录？',
+    msg: `“${fmtTime(folder)}”目录及其中所有文件将被永久删除，此操作无法撤销。`,
+    action: '删除',
+    onConfirm: async () => {
+      try {
+        const r = await fetch(`/api/folder/${name}`, { method: 'DELETE' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || '删除失败');
+        toast('已删除');
+        loadList();
+      } catch (e) {
+        // 目录已被清掉（自动清理 / 手动删除等）时，刷新列表移除幽灵行
+        toast(e.message);
+        loadList();
+      }
+    },
+  });
+}
+
+// ---------- 地址分享 ----------
+const siteUrl = location.origin + location.pathname;
+$('#site-url').textContent = siteUrl;
+const shareFolder = new URLSearchParams(location.search).get('folder') || '';
+
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    document.body.removeChild(ta);
+    ok ? resolve() : reject(new Error('copy failed'));
+  });
+}
+async function copy(url) {
+  try { await copyText(url); toast('已复制'); }
+  catch { toast('复制失败，请手动复制'); }
+}
+function copySite() { copy(siteUrl); }
+function copyFolder(name) { copy(`${siteUrl}?folder=${name}`); }
+
+loadList();
+</script>
+</body>
+</html>

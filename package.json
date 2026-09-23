@@ -1,0 +1,17 @@
+{
+  "name": "file-box",
+  "version": "1.0.0",
+  "description": "轻量文件上传 / 下载服务：批量上传、按时间分组、支持 PC 与移动端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.21.2",
+    "multer": "^2.4.0"
+  }
+}
