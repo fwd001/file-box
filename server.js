@@ -13,7 +13,7 @@ const PORT = Number(process.env.PORT) || 3000;              // HTTP 端口（完
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 3443;   // HTTPS 端口（传输层加密 + 原生加密引擎）
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const STORAGE_LIMIT_GB = Number(process.env.STORAGE_LIMIT_GB) || 10; // 存储总量上限
-const RETENTION_DAYS = Number(process.env.RETENTION_DAYS) || 30;      // 超过 N 天的目录自动清理
+const RETENTION_DAYS = Number(process.env.RETENTION_DAYS) || 90;      // 超过 N 天的目录自动清理
 const STORAGE_LIMIT = STORAGE_LIMIT_GB * 1024 * 1024 * 1024;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
