@@ -280,6 +280,10 @@
     header { padding-left: 16px; padding-right: 16px; }
     header h1 { font-size: 30px; }
     .wrap { padding-left: 12px; padding-right: 12px; }
+    /* 目录行：操作按钮换到第二行，避免挤掉时间 */
+    .folder-head { flex-wrap: wrap; row-gap: 2px; }
+    .folder-head .del { order: 1; }
+    .folder-head .acts { order: 2; flex-basis: 100%; padding-left: 18px; }
   }
 </style>
 </head>
@@ -402,29 +406,25 @@ const enc = encodeURIComponent;
 // ---------- 上传 ----------
 const drop = $('#drop'), input = $('#input');
 let selected = [];
-// 记录文件时优先用相对路径（选择文件夹上传时保留目录结构）
+// 记录文件名（桌面拖拽文件夹时 webkitRelativePath 会带相对路径，普通选择只有文件名）
 const relPath = (f) => f.webkitRelativePath || f.name;
 
-// 触屏设备：点击选择区先弹「照片图库 / 选择文件 / 选择文件夹」；桌面直接打开文件对话框
+// 触屏设备：点击选择区先弹「照片图库 / 选择文件」；桌面直接打开文件对话框
 const isCoarse = matchMedia('(pointer: coarse)').matches;
-const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 drop.addEventListener('click', () => {
   if (!isCoarse) { pickFiles('file'); return; }
   const actions = [
     { label: '照片图库', onClick: () => pickFiles('media') },
     { label: '选择文件', onClick: () => pickFiles('file') },
+    { label: '取消', class: 'sheet-cancel' },
   ];
-  if (!isIOS) actions.push({ label: '选择文件夹', onClick: () => pickFiles('dir') });
-  actions.push({ label: '取消', class: 'sheet-cancel' });
   actionSheet({ title: '选择上传内容', actions });
 });
 function pickFiles(kind) {
   input.removeAttribute('webkitdirectory');
   input.removeAttribute('accept');
   if (kind === 'media') input.accept = 'image/*,video/*';
-  else if (kind === 'dir') input.setAttribute('webkitdirectory', '');
   input.click();
 }
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
