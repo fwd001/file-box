@@ -19,6 +19,7 @@
     --text2: rgba(60,60,67,.6);         /* secondaryLabel */
     --text3: rgba(60,60,67,.32);        /* tertiaryLabel */
     --accent: #007AFF;                  /* systemBlue */
+    --accent-fill: #0071E3;             /* 实底按钮用：白字对比度 4.70:1（#007AFF 仅 4.02:1，不足 AA 4.5:1） */
     --red: #FF3B30;                     /* systemRed */
     --sep: rgba(60,60,67,.29);          /* separator */
     --fill: rgba(120,120,128,.12);      /* systemFill */
@@ -33,6 +34,7 @@
       --text2: rgba(235,235,245,.6);
       --text3: rgba(235,235,245,.32);
       --accent: #0A84FF;
+      --accent-fill: #0A69E8;           /* 暗色实底：白字 5.00:1 */
       --red: #FF453A;
       --sep: rgba(84,84,88,.6);
       --fill: rgba(120,120,128,.24);
@@ -92,29 +94,45 @@
   }
 
   /* ---------- 上传 ---------- */
-  .upload-pad { padding: 16px; }
-  #drop {
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    padding: 26px 16px; border-radius: 10px; cursor: pointer;
-    background: var(--bg); border: 1.5px dashed var(--sep);
-    transition: border-color .2s, background .2s;
-    -webkit-user-select: none; user-select: none;
-  }
-  #drop.drag { border-color: var(--accent); background: var(--fill); }
-  #drop svg { width: 34px; height: 34px; color: var(--accent); margin-bottom: 6px; }
-  #drop .big { font-size: 17px; font-weight: 500; }
-  #drop .sub { font-size: 13px; color: var(--text2); }
-  #drop .sub .accent { color: var(--accent); font-weight: 500; }
+  .upload-pad { padding: 16px; border-radius: 12px; transition: background .2s; }
+  .panel.dragging { box-shadow: inset 0 0 0 2px var(--accent); }
+  .panel.dragging .upload-pad { background: var(--fill); }
 
-  #file-list { max-height: 150px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .step-hint {
+    font-size: 13px; color: var(--text2); text-align: center;
+    margin-top: 10px; line-height: 1.6;
+  }
+  .step-hint .accent { color: var(--accent); font-weight: 500; }
+  .step-hint i { font-style: normal; }
+
+  /* 已选清单 */
+  .staged-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-top: 16px;
+  }
+  .staged-head .t { font-size: 15px; font-weight: 600; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .staged-head .ops { flex-shrink: 0; }
+
+  #file-list { max-height: 216px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   #file-list .row {
-    display: flex; justify-content: space-between; gap: 12px;
-    padding: 9px 0; border-bottom: 0.5px solid var(--sep);
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 0; border-bottom: 0.5px solid var(--sep);
     font-size: 15px; color: var(--text);
   }
   #file-list .row:last-child { border-bottom: none; }
-  #file-list .row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #file-list .row b { font-weight: 400; color: var(--text2); flex-shrink: 0; }
+  #file-list .row span { flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #file-list .row b { font-weight: 400; color: var(--text2); flex-shrink: 0; font-size: 13px; }
+  /* 视觉小、可点区域 44×44（Apple HIG 最小触摸目标） */
+  #file-list .rm {
+    flex-shrink: 0; width: 44px; height: 44px; margin: -11px -10px -11px -6px;
+    border: none; background: transparent; color: var(--text3);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    -webkit-user-select: none; user-select: none; touch-action: manipulation;
+  }
+  #file-list .rm svg { width: 15px; height: 15px; }
+  #file-list .rm:active { opacity: .4; }
 
   .bar { height: 5px; border-radius: 3px; background: var(--fill);
     margin-top: 14px; overflow: hidden; display: none; }
@@ -122,15 +140,18 @@
     border-radius: 3px; transition: width .15s linear; }
 
   .btn {
-    display: block; width: 100%; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; border: none; cursor: pointer;
     font: inherit; font-size: 17px; font-weight: 600;
     height: 50px; border-radius: 12px; margin-top: 14px;
     -webkit-user-select: none; user-select: none;
     transition: opacity .15s; touch-action: manipulation;
   }
+  .btn svg { width: 19px; height: 19px; flex-shrink: 0; }
   .btn:disabled { opacity: .4; }
-  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary { background: var(--accent-fill); color: #fff; }
   .btn-primary:active:not(:disabled) { opacity: .6; }
+  #pick { margin-top: 0; }
 
   /* ---------- 文件列表 ---------- */
   #loading { text-align: center; padding: 30px 0 26px; color: var(--text2);
@@ -225,7 +246,7 @@
     white-space: nowrap; font-size: 15px; color: var(--text); user-select: text;
     -webkit-user-select: text; -webkit-touch-callout: default; }
   .copy-btn {
-    flex-shrink: 0; border: none; background: var(--accent); color: #fff;
+    flex-shrink: 0; border: none; background: var(--accent-fill); color: #fff;
     font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
     padding: 9px 18px; border-radius: 9px;
     -webkit-user-select: none; user-select: none; touch-action: manipulation;
@@ -295,23 +316,35 @@
 
 <div class="wrap">
   <div class="sec">上传文件</div>
-  <section class="panel">
+  <section class="panel" id="drop">
     <div class="upload-pad">
       <form id="form">
-        <div id="drop">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 20V8"/>
-            <path d="M6 14l6-6 6 6"/>
-            <path d="M4 20h16"/>
-          </svg>
-          <div class="big">点击选择文件</div>
-          <div class="sub">支持一次选择 <span class="accent">多个文件</span> 批量上传</div>
-        </div>
         <input type="file" id="input" multiple hidden>
-        <div id="file-list"></div>
-        <div class="bar" id="bar"><div></div></div>
-        <button type="submit" class="btn btn-primary" id="submit">开始上传（0 个文件）</button>
+
+        <!-- 第 1 步：主按钮 = 选择文件 -->
+        <button type="button" class="btn btn-primary" id="pick">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/>
+          </svg>
+          选择文件
+        </button>
+        <div class="step-hint" id="pick-hint">可一次选<span class="accent">多个文件</span>，选好后点「上传」才会发送<i id="hint-drag">，也可直接把文件拖进来</i></div>
+
+        <!-- 第 2 步：确认清单 → 上传 -->
+        <div id="staged" hidden>
+          <div class="staged-head">
+            <span class="t" id="staged-count"></span>
+            <span class="ops">
+              <button type="button" class="linkbtn" id="again">继续添加</button>
+              <button type="button" class="linkbtn" id="clear">清空</button>
+            </span>
+          </div>
+          <div id="file-list"></div>
+          <div class="bar" id="bar"><div></div></div>
+          <button type="submit" class="btn btn-primary" id="submit">上传</button>
+        </div>
+
         <div class="usage" id="usage">
           <div class="usage-bar"><div id="usage-fill"></div></div>
           <div class="usage-text"><span id="usage-used"></span><span id="usage-limit"></span></div>
@@ -404,60 +437,104 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
 const enc = encodeURIComponent;
 
 // ---------- 上传 ----------
-const drop = $('#drop'), input = $('#input');
-let selected = [];
+const drop = $('#drop'), input = $('#input'), pick = $('#pick'), staged = $('#staged');
+let selected = [];      // 待上传清单
+let uploading = false;  // 上传期间锁定清单，避免中途增删
 // 记录文件名（桌面拖拽文件夹时 webkitRelativePath 会带相对路径，普通选择只有文件名）
 const relPath = (f) => f.webkitRelativePath || f.name;
-
-// 触屏设备：点击选择区先弹「照片图库 / 选择文件」；桌面直接打开文件对话框
+// 触屏设备：点「选择文件」先弹「照片图库 / 选择文件」；桌面直接打开文件对话框
 const isCoarse = matchMedia('(pointer: coarse)').matches;
+if (isCoarse) $('#hint-drag').remove();
 
-drop.addEventListener('click', () => {
-  if (!isCoarse) { pickFiles('file'); return; }
-  const actions = [
-    { label: '照片图库', onClick: () => pickFiles('media') },
-    { label: '选择文件', onClick: () => pickFiles('file') },
-    { label: '取消', class: 'sheet-cancel' },
-  ];
-  actionSheet({ title: '选择上传内容', actions });
-});
+// 状态机：未选文件 → 主按钮是「选择文件」；已选 → 清单 + 主按钮「上传」
+// 任一时刻只有一个主操作，第一次进来照着点即可
+function renderUpload() {
+  const n = selected.length;
+  pick.style.display = n ? 'none' : 'flex';
+  $('#pick-hint').style.display = n ? 'none' : 'block';
+  staged.hidden = !n;
+  $('#staged-count').textContent = n
+    ? `已选 ${n} 个文件 · ${fmtSize(selected.reduce((s, f) => s + f.size, 0))}` : '';
+  $('#file-list').innerHTML = selected.map((f, i) => `
+    <div class="row">
+      <span title="${esc(relPath(f))}">${esc(relPath(f))}</span>
+      <b>${fmtSize(f.size)}</b>
+      <button type="button" class="rm" data-i="${i}" aria-label="移除该文件">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+          stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>`).join('');
+  if (!uploading) $('#submit').disabled = overLimit;
+}
+
+function openPicker() {
+  if (uploading) return;
+  if (!isCoarse) return pickFiles('file');
+  actionSheet({
+    title: '选择上传内容',
+    actions: [
+      { label: '照片图库', onClick: () => pickFiles('media') },
+      { label: '选择文件', onClick: () => pickFiles('file') },
+      { label: '取消', class: 'sheet-cancel' },
+    ],
+  });
+}
 function pickFiles(kind) {
   input.removeAttribute('webkitdirectory');
   input.removeAttribute('accept');
   if (kind === 'media') input.accept = 'image/*,video/*';
   input.click();
 }
-drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
-drop.addEventListener('drop', (e) => {
-  e.preventDefault(); drop.classList.remove('drag');
-  setFiles(e.dataTransfer.files);
+pick.addEventListener('click', openPicker);
+$('#again').addEventListener('click', openPicker);
+$('#clear').addEventListener('click', () => { if (uploading) return; selected = []; renderUpload(); });
+$('#file-list').addEventListener('click', (e) => {
+  const b = e.target.closest('.rm');
+  if (!b || uploading) return;
+  selected.splice(Number(b.dataset.i), 1);
+  renderUpload();
 });
-input.addEventListener('change', () => setFiles(input.files));
-function setFiles(files) {
-  selected = Array.from(files);
-  $('#submit').textContent = `开始上传（${selected.length} 个文件）`;
-  $('#file-list').innerHTML = selected
-    .map((f) => `<div class="row"><span title="${esc(relPath(f))}">${esc(relPath(f))}</span><b>${fmtSize(f.size)}</b></div>`)
-    .join('');
+
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('dragging'); });
+drop.addEventListener('dragleave', (e) => { if (!drop.contains(e.relatedTarget)) drop.classList.remove('dragging'); });
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.classList.remove('dragging');
+  addFiles(e.dataTransfer.files);
+});
+input.addEventListener('change', () => { addFiles(input.files); input.value = ''; });
+// 追加合并（按 名称+大小 去重），支持分几次把文件凑齐
+function addFiles(list) {
+  if (uploading || !list || !list.length) return;
+  const seen = new Set(selected.map((f) => relPath(f) + '@' + f.size));
+  for (const f of Array.from(list)) {
+    const k = relPath(f) + '@' + f.size;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    selected.push(f);
+  }
+  renderUpload();
 }
+
 async function upload() {
   if (!selected.length) { toast('请先选择文件'); return; }
   const btn = $('#submit');
-  btn.disabled = true; btn.textContent = '准备中…';
+  uploading = true;
+  btn.disabled = true;
   const bar = $('#bar'); bar.style.display = 'block';
   bar.querySelector('div').style.width = '0%';
+  const n = selected.length;
 
   try {
     // 客户端加密（用户无感）：文件内容与文件名加密后才上传
     const fd = new FormData();
     const items = [];
-    for (let i = 0; i < selected.length; i++) {
+    for (let i = 0; i < n; i++) {
       const f = selected[i];
-      btn.textContent = `处理中 ${i + 1}/${selected.length}…`;
+      btn.textContent = `加密中 ${i + 1}/${n}…`;
       const encName = randName();
       const blob = await FBCrypto.encryptFile(f, (p) => {
-        bar.querySelector('div').style.width = ((i + p / 100) / selected.length * 100) + '%';
+        bar.querySelector('div').style.width = ((i + p / 100) / n * 100) + '%';
       });
       fd.append('files', blob, encName);
       items.push({ name: relPath(f), size: f.size, enc: encName });
@@ -483,13 +560,16 @@ async function upload() {
       xhr.send(fd);
     });
     toast('上传成功');
-    setFiles([]); input.value = '';
+    selected = [];
+    renderUpload();
     loadList();
   } catch (e) {
     toast(e.message);
     if (/上限/.test(e.message)) loadList();
   } finally {
-    btn.disabled = overLimit; btn.textContent = '开始上传（0 个文件）';
+    uploading = false;
+    btn.textContent = '上传';
+    btn.disabled = overLimit;
     setTimeout(() => { bar.style.display = 'none'; }, 300);
   }
 }
@@ -516,7 +596,7 @@ async function loadList() {
     $('#usage').classList.toggle('warn', overLimit);
     $('#warn').style.display = overLimit ? 'block' : 'none';
     $('#retention-note').textContent = `超 ${u.retentionDays || 90} 天自动清理`;
-    $('#submit').disabled = overLimit;
+    if (!uploading) $('#submit').disabled = overLimit;
     lastList = data;
     if (!data.folders.length) { empty.style.display = 'block'; return; }
     listBox.innerHTML = data.folders.map((f) => `
