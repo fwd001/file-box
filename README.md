@@ -113,6 +113,11 @@ tar -xf /tmp/file-box-<旧版本>.tar.gz -C /opt/file-box --strip-components=1
 pm2 restart file-box
 ```
 
+> ⚠️ **恢复数据备份要注意保留期**：`uploads/` 里目录名是上传时间，超过 `RETENTION_DAYS`
+> （默认 90 天）的目录会在服务启动、每 6 小时、每次上传时被自动删除。
+> 把很旧的备份还原到新服务器上，启动后就会被清掉。还原前先确认日期，
+> 或临时调大 `RETENTION_DAYS`（例：`RETENTION_DAYS=3650 pm2 restart file-box`）再导入。
+
 ## pm2 启动
 
 ```bash
