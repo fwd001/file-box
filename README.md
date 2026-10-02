@@ -27,6 +27,9 @@
 │   ├── index.html       # 前端单页
 │   ├── crypto.js        # 浏览器端加密模块（原生 WebCrypto + 纯 JS 回退）
 │   └── dec-worker.js    # 打包下载的解密线程
+├── scripts/
+│   └── pack.js          # npm run pack：按白名单收集出 dist 发布包并自校验
+├── dist/                # 发布产物（npm run pack 生成，不入库）
 ├── uploads/             # 上传文件（密文）存放处，启动时自动创建
 ├── .certs/              # HTTPS 自签证书，首次启动自动生成
 └── README.md
@@ -49,6 +52,66 @@ npm start
 ```
 
 启动后浏览器访问：`http://服务器IP:3000`（也支持 `https://服务器IP:3443`，见下文「HTTP 与 HTTPS」）
+
+## 打包（出发布产物）
+
+```bash
+npm run pack
+# 产物：dist/file-box-1.0.0.tar.gz（约 40KB / 8 个文件）
+#      dist/file-box/                （同内容的目录，可直接拿去跑）
+```
+
+按**白名单**收文件，只含运行必需的代码与配置：
+`server.js`、`public/`（前端 3 个静态文件）、`package.json`、`package-lock.json`、`ecosystem.config.js`、`README.md`。
+
+**刻意不进包**（打包脚本会自检，混进去就直接失败退出）：
+
+- `node_modules/` —— 生产机上用 `npm install --omit=dev` 现装
+- `uploads/` —— 你的文件数据都在这里
+- `.certs/` —— HTTPS 私钥，每台服务器各自生成
+- `.env`、`*.log`、`.git/`、`dist/`
+
+> 本项目前端零构建：`public/` 下的文件由 Express 直出，`npm run pack` 只做收集与压缩，
+> 没有编译/混淆步骤，改了前端不需要重新打包（开发时直接刷新页面即可）。
+
+## 生产部署（跑 dist）
+
+```bash
+# 1. 本地打包并传到服务器
+npm run pack
+scp dist/file-box-1.0.0.tar.gz user@server:/tmp/
+
+# 2. 服务器上解压到部署目录
+mkdir -p /opt/file-box
+tar -xf /tmp/file-box-1.0.0.tar.gz -C /opt/file-box --strip-components=1
+
+# 3. 装生产依赖并启动
+cd /opt/file-box
+npm install --omit=dev
+pm2 start ecosystem.config.js
+pm2 save
+
+# 4. 验证（端口以 ecosystem.config.js 的 env.PORT 为准：pm2 方式默认是 4444，
+#    直接 npm start 不带配置才是 3000）
+curl -s http://127.0.0.1:4444/api/list | head -c 200
+```
+
+> ⚠️ **数据就在应用目录里**：`uploads/` 与 `.certs/` 不在发布包中，但运行时会生成在
+> 应用目录下。**升级时不要用「删掉整个目录再解压」的方式**，否则历史文件会被一起删掉。
+> 正确做法是解压覆盖（`tar -xf` 只覆盖同名文件，不会删除多余文件）。
+
+### 升级与回滚
+
+```bash
+# 升级：先备份数据，再解压覆盖，最后重启
+tar -czf /tmp/uploads-$(date +%F).tar.gz -C /opt/file-box uploads
+tar -xf /tmp/file-box-<新版本>.tar.gz -C /opt/file-box --strip-components=1
+cd /opt/file-box && npm install --omit=dev && pm2 restart file-box
+
+# 回滚：用旧版本包再覆盖一次即可（uploads/ 不受影响）
+tar -xf /tmp/file-box-<旧版本>.tar.gz -C /opt/file-box --strip-components=1
+pm2 restart file-box
+```
 
 ## pm2 启动
 
@@ -124,13 +187,15 @@ pm2 save
 
 ## 更新代码
 
-每次更新后同一套流程即可：
+用 git 直接部署（不走 dist 包）的话，同一套流程即可：
 
 ```bash
-git pull                # 拉取最新代码（如使用 git）
+git pull                # 拉取最新代码
 npm install             # 如有新依赖
 pm2 restart file-box    # 重启生效
 ```
+
+用上面的 dist 发布包部署，则见「升级与回滚」。
 
 ## 使用说明
 

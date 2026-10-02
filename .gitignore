@@ -11,6 +11,9 @@ uploads/
 *.log
 *.pid
 *.tmp
+
+# 发布产物（npm run pack 生成）
+dist/
 .DS_Store
 Thumbs.db
 
