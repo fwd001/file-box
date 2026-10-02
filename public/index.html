@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>文件盒子</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%23007AFF'/><path d='M12 16V7M7.5 11.5L12 7l4.5 4.5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <style>
   /* ---------- iOS 系统颜色（Apple HIG） ---------- */
   :root {
@@ -369,6 +370,13 @@
         <button class="copy-btn" onclick="copySite()">复制</button>
       </div>
       <div class="share-hint">每个目录行都有「复制链接」按钮，复制后发给他人，打开链接会自动展开并定位到该目录。</div>
+      <div id="https-row" hidden>
+        <div class="share-row" style="margin-top:10px">
+          <span class="url" id="https-url"></span>
+          <button class="copy-btn" onclick="copy(httpsUrl)">复制</button>
+        </div>
+        <div class="share-hint" id="https-note"></div>
+      </div>
     </div>
   </section>
 </div>
@@ -598,6 +606,15 @@ async function loadList() {
     $('#retention-note').textContent = `超 ${u.retentionDays || 90} 天自动清理`;
     if (!uploading) $('#submit').disabled = overLimit;
     lastList = data;
+    // HTTP 非安全上下文没有 WebCrypto，加解密只能跑纯 JS（实测慢约 150 倍）→ 给用户指个路
+    if (data.httpsPort && !FBCrypto.native && location.protocol === 'http:') {
+      httpsUrl = `https://${location.hostname}:${data.httpsPort}${location.pathname}`;
+      $('#https-url').textContent = httpsUrl;
+      $('#https-note').textContent = '当前用 HTTP 地址访问，浏览器只能用兼容模式加解密，上传和打包下载都会慢一个数量级。改用上面的 HTTPS 地址可大幅提速，首次访问需在浏览器里信任一次自签证书。';
+      $('#https-row').hidden = false;
+    } else {
+      $('#https-row').hidden = true;
+    }
     if (!data.folders.length) { empty.style.display = 'block'; return; }
     listBox.innerHTML = data.folders.map((f) => `
       <div class="folder" data-name="${esc(f.name)}">
@@ -609,7 +626,7 @@ async function loadList() {
             <div class="folder-meta">${f.count} 个文件 · ${fmtSize(f.size)}<span class="tag">${esc(relTag(f.name))}</span></div>
           </div>
           <span class="acts" onclick="event.stopPropagation()">
-            <button class="linkbtn" onclick="downZip('${enc(f.name)}')">打包下载</button>
+            <button class="linkbtn" onclick="downZip('${enc(f.name)}', this)">打包下载</button>
             <button class="linkbtn" onclick="copyFolder('${enc(f.name)}')">复制链接</button>
           </span>
           <button class="del" title="删除" onclick="event.stopPropagation();delFolder('${enc(f.name)}')">
@@ -712,7 +729,7 @@ document.addEventListener('click', async (e) => {
   }
 });
 
-// ---------- 前端 zip 打包（STORE 模式，不压缩） ----------
+// ---------- 打包下载：一条聚合流 + 多核解密 + 边解边拼 zip（STORE 模式，不压缩） ----------
 const CRC_T = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
@@ -722,79 +739,278 @@ const CRC_T = (() => {
   }
   return t;
 })();
-function crc32(u8) {
-  let c = 0xffffffff;
+const crcFeed = (u8, seed) => { // 增量 CRC：分块喂入，省掉整文件二次复制
+  let c = seed;
   for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-async function buildZip(entries) {
+  return c;
+};
+const crcDone = (c) => (c ^ 0xffffffff) >>> 0;
+
+// zip 写入器：数据分片以 Blob 引用按序拼接，内存占用不再翻倍
+function createZipWriter() {
   const parts = [], central = [];
   let offset = 0;
   const d = new Date();
   const dosTime = ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | ((d.getSeconds() >> 1) & 31);
   const dosDate = (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31);
-  for (const e of entries) {
-    if (e.blob.size > 0xffffff00) throw new Error('单个文件超 4GB，无法打包，请单独下载');
-    const nameB = te.encode(e.name);
-    const data = new Uint8Array(await e.blob.arrayBuffer());
-    const crc = crc32(data);
-    const lh = new Uint8Array(30 + nameB.length);
-    const v = new DataView(lh.buffer);
-    v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true);
-    v.setUint16(8, 0, true); v.setUint16(10, dosTime, true); v.setUint16(12, dosDate, true);
-    v.setUint32(14, crc, true); v.setUint32(18, data.length, true); v.setUint32(22, data.length, true);
-    v.setUint16(26, nameB.length, true); v.setUint16(28, 0, true);
-    lh.set(nameB, 30);
-    parts.push(lh, data);
-    const cd = new Uint8Array(46 + nameB.length);
-    const c = new DataView(cd.buffer);
-    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
-    c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, dosTime, true); c.setUint16(14, dosDate, true);
-    c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
-    c.setUint16(28, nameB.length, true); c.setUint32(42, offset, true);
-    cd.set(nameB, 46);
-    central.push(cd);
-    offset += lh.length + data.length;
-    if (offset > 0xffffff00) throw new Error('内容过大（超 4GB），请逐个下载');
-  }
-  const cdSize = central.reduce((s, x) => s + x.length, 0);
-  const eocd = new Uint8Array(22);
-  const ev = new DataView(eocd.buffer);
-  ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
-  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
-  return new Blob([...parts, ...central, eocd], { type: 'application/zip' });
+  return {
+    add(name, crc, size, dataParts) {
+      if (size > 0xffffff00) throw new Error('单个文件超 4GB，无法打包，请单独下载');
+      if (offset > 0xffffff00) throw new Error('内容过大（超 4GB），请逐个下载');
+      const nameB = te.encode(name);
+      const lh = new Uint8Array(30 + nameB.length);
+      const v = new DataView(lh.buffer);
+      v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(6, 0x0800, true);
+      v.setUint16(8, 0, true); v.setUint16(10, dosTime, true); v.setUint16(12, dosDate, true);
+      v.setUint32(14, crc, true); v.setUint32(18, size, true); v.setUint32(22, size, true);
+      v.setUint16(26, nameB.length, true); v.setUint16(28, 0, true);
+      lh.set(nameB, 30);
+      parts.push(lh, ...dataParts);
+      const cd = new Uint8Array(46 + nameB.length);
+      const c = new DataView(cd.buffer);
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true);
+      c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true); c.setUint16(12, dosTime, true); c.setUint16(14, dosDate, true);
+      c.setUint32(16, crc, true); c.setUint32(20, size, true); c.setUint32(24, size, true);
+      c.setUint16(28, nameB.length, true); c.setUint32(42, offset, true);
+      cd.set(nameB, 46);
+      central.push(cd);
+      offset += lh.length + size;
+    },
+    finish(count) {
+      const cdSize = central.reduce((s, x) => s + x.length, 0);
+      const eocd = new Uint8Array(22);
+      const ev = new DataView(eocd.buffer);
+      ev.setUint32(0, 0x06054b50, true);
+      ev.setUint16(8, count, true); ev.setUint16(10, count, true);
+      ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+      return new Blob([...parts, ...central, eocd], { type: 'application/zip' });
+    },
+  };
 }
+
+// 归档流读取器：带缓冲，可精确取 n 字节（fill）或按需取一段（take）
+function createArchiveReader(body) {
+  const reader = body.getReader();
+  let buf = new Uint8Array(0), pos = 0;
+  const pull = async () => {
+    const r = await reader.read();
+    if (r.done) return false;
+    if (!r.value || !r.value.length) return true;
+    if (pos === buf.length) { buf = r.value; pos = 0; return true; }
+    const rest = buf.length - pos;
+    const nb = new Uint8Array(rest + r.value.length);
+    nb.set(buf.subarray(pos), 0);
+    nb.set(r.value, rest);
+    buf = nb; pos = 0;
+    return true;
+  };
+  return {
+    async fill(target, off, n) {
+      let got = 0;
+      while (got < n) {
+        if (pos >= buf.length && !(await pull())) throw new Error('归档数据不完整');
+        const take = Math.min(n - got, buf.length - pos);
+        target.set(buf.subarray(pos, pos + take), off + got);
+        pos += take;
+        got += take;
+      }
+      return target;
+    },
+    async take(max) {
+      while (pos >= buf.length) { if (!(await pull())) return null; }
+      const take = Math.min(max, buf.length - pos);
+      const out = buf.subarray(pos, pos + take);
+      pos += take;
+      return out;
+    },
+  };
+}
+
+// 密文块：[4B 明文长度][12B IV][密文+16B 校验]
+async function readEncBlock(rd, max) {
+  const h = await rd.fill(new Uint8Array(4), 0, 4);
+  const len = ((h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3]) >>> 0;
+  const n = 4 + 12 + len + 16;
+  if (n > max) throw new Error('归档数据不完整');
+  const block = new Uint8Array(n);
+  block.set(h, 0);
+  await rd.fill(block, 4, n - 4);
+  return { block, n };
+}
+
+// 解密线程池（只在纯 JS 引擎下用；原生 WebCrypto 已快三个数量级）。
+// 建一次长期复用；密钥由 0 号线程派生一次再分发给其余线程——否则每个线程都要各跑一次
+// 12 万次 PBKDF2（实测每次约 2s），6 个线程就是白等 2s 还占满 CPU。
+let packPool = null;
+function getDecryptPool() {
+  if (packPool) return packPool;
+  const size = Math.max(2, Math.min(6, Math.ceil((navigator.hardwareConcurrency || 4) / 2)));
+  const engine = FBCrypto.native ? 'native' : 'js';
+  const idle = [], busy = new Map(), queue = [];
+  let seq = 0;
+  const dispatch = () => {
+    while (queue.length && idle.length) {
+      const w = idle.pop(), job = queue.shift();
+      busy.set(w, job.resolve);
+      w.postMessage({ op: 'decrypt', id: job.id, block: job.block, engine: job.engine }, [job.block.buffer]);
+    }
+  };
+  const admit = (w) => {
+    if (w.__in) return;
+    w.__in = true;
+    idle.push(w);
+    dispatch();
+  };
+  const workers = [];
+  for (let i = 0; i < size; i++) {
+    const w = new Worker('dec-worker.js');
+    w.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.op === 'key') {
+        // 同一线程的消息按 FIFO 处理，密钥一定排在解密任务前面
+        for (let k = 1; k < size; k++) workers[k].postMessage({ op: 'initKey', key: msg.key, engine });
+        workers.forEach(admit);
+        packPool.lastEngine = msg.engine || engine;
+        return;
+      }
+      const resolve = busy.get(w);
+      busy.delete(w);
+      idle.push(w);
+      if (msg.engine) packPool.lastEngine = msg.engine; // 记录线程实际用的引擎
+      if (resolve) resolve(msg);
+      dispatch();
+    };
+    w.onerror = () => {
+      const i = idle.indexOf(w);
+      if (i >= 0) idle.splice(i, 1);
+      const resolve = busy.get(w);
+      busy.delete(w);
+      if (resolve) resolve({ error: '解密线程异常' });
+      workers.forEach(admit); // 有线程掉线也别把任务卡死
+    };
+    workers.push(w);
+  }
+  if (engine === 'native') {
+    workers.forEach(admit);
+  } else {
+    admit(workers[0]);
+    workers[0].postMessage({ op: 'deriveKey', engine });
+    setTimeout(() => workers.forEach(admit), 15000); // 0 号没回密钥就退化成各线程自己派生
+  }
+  packPool = {
+    size,
+    lastEngine: null,
+    decrypt(block) {
+      const id = ++seq;
+      return new Promise((resolve) => {
+        queue.push({ id, block, engine: FBCrypto.native ? 'native' : 'js', resolve });
+        dispatch();
+      }).then((r) => { if (r.error) throw new Error(r.error); return r.pt; });
+    },
+  };
+  return packPool;
+}
+
 let zipping = false; // 防止打包期间重复点击
-async function downZip(nameEnc) {
+async function downZip(nameEnc, btn) {
   if (zipping) { toast('正在打包中，请稍候'); return; }
   zipping = true;
   const folder = decodeURIComponent(nameEnc);
-  toast('打包中…');
+  const label = btn ? btn.textContent : '';
+  const setLabel = (t) => { if (btn) { btn.textContent = t; btn.disabled = true; } };
+  let pool = null;
+  let lastPaint = 0;
+  const paint = (done, total) => {
+    const now = performance.now();
+    if (!total || now - lastPaint < 120) return;
+    lastPaint = now;
+    setLabel(Math.min(99, Math.floor((done / total) * 100)) + '%');
+  };
+
   try {
-    const m = await getManifest(folder);
-    const entries = [];
-    if (m && m.files) {
-      for (let i = 0; i < m.files.length; i++) {
-        const f = m.files[i];
-        entries.push({ name: f.name, blob: await fetchAndDecrypt(folder, f.enc) });
-        if (m.files.length > 1) toast(`打包中 ${i + 1}/${m.files.length}`);
-      }
-    } else {
-      // 旧数据：直接取文件打包
-      const sf = (lastList && lastList.folders.find((x) => x.name === folder) || { files: [] }).files;
-      for (const x of sf.filter((y) => y.name !== 'manifest.enc')) {
-        const r = await fetch(`/api/download/${enc(folder)}/${enc(x.name)}`);
-        if (!r.ok) throw new Error('下载失败');
-        entries.push({ name: x.name, blob: await r.blob() });
-      }
+    const r = await fetch(`/api/archive/${enc(folder)}`);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || '打包失败');
     }
-    if (!entries.length) { toast('目录为空'); return; }
-    saveBlob(await buildZip(entries), `${folder}.zip`);
+    const total = Number(r.headers.get('Content-Length')) || 0;
+    // 小目录不值得起线程（建池 + 派生密钥就要 0.7s）
+    if (!FBCrypto.native && total > 4 * 1024 * 1024) pool = getDecryptPool();
+    const rd = createArchiveReader(r.body);
+    const zip = createZipWriter();
+    const win = (pool ? pool.size : 0) + 1; // 在途块数：让网络与多核解密重叠
+    let nameMap = null, count = 0, done = 0, consumed = 0;
+    setLabel('0%');
+
+    for (;;) {
+      let head;
+      try {
+        head = await rd.fill(new Uint8Array(10), 0, 10);
+      } catch {
+        if (consumed === total) break; // 正常读完
+        throw new Error('归档数据不完整');
+      }
+      const hv = new DataView(head.buffer);
+      const nameLen = hv.getUint16(0);
+      const size = hv.getUint32(2) * 4294967296 + hv.getUint32(6);
+      const name = td.decode(await rd.fill(new Uint8Array(nameLen), 0, nameLen));
+      consumed += 10 + nameLen;
+
+      if (name === 'manifest.enc') {
+        const mf = await rd.fill(new Uint8Array(size), 0, size);
+        consumed += size; done += size;
+        // 清单也交给线程池：纯 JS 引擎下首次派生密钥要 0.7s，别冻住主线程
+        const plain = await (pool ? pool.decrypt(mf) : FBCrypto.decryptBytes(mf));
+        const m = JSON.parse(td.decode(plain));
+        if (m && m.files) nameMap = new Map(m.files.map((x) => [x.enc, x.name]));
+        continue;
+      }
+
+      const dataParts = [];
+      let crc = 0xffffffff, psize = 0, left = size;
+      const emit = (pt) => {
+        crc = crcFeed(pt, crc);
+        psize += pt.length;
+        dataParts.push(new Blob([pt]));
+      };
+      if (nameMap) {
+        // 加密目录：边下边分块解密，最多 win 块在途
+        const inflight = [];
+        while (left > 0) {
+          const blk = await readEncBlock(rd, left);
+          left -= blk.n;
+          consumed += blk.n;
+          done += blk.n;
+          inflight.push(pool ? pool.decrypt(blk.block) : FBCrypto.decryptBytes(blk.block));
+          if (inflight.length >= win) emit(await inflight.shift());
+          paint(done, total);
+        }
+        while (inflight.length) emit(await inflight.shift());
+      } else {
+        // 旧数据（未加密）：原样搬运
+        while (left > 0) {
+          const chunk = await rd.take(left);
+          if (!chunk) throw new Error('归档数据不完整');
+          left -= chunk.length;
+          consumed += chunk.length;
+          done += chunk.length;
+          emit(chunk);
+          paint(done, total);
+        }
+      }
+      zip.add((nameMap && nameMap.get(name)) || name, crcDone(crc), psize, dataParts);
+      count++;
+    }
+
+    if (!count) { toast('目录为空'); return; }
+    setLabel('打包中…');
+    saveBlob(zip.finish(count), `${folder}.zip`);
     toast('已下载');
   } catch (e) {
     toast(e.message || '打包失败');
   } finally {
+    setLabel(label);
+    if (btn) btn.disabled = false;
     zipping = false;
   }
 }
@@ -850,6 +1066,7 @@ function delFolder(name) {
 
 // ---------- 地址分享 ----------
 const siteUrl = location.origin + location.pathname;
+let httpsUrl = ''; // 仅在 HTTP 兼容模式下才有值（见 loadList）
 $('#site-url').textContent = siteUrl;
 const shareFolder = new URLSearchParams(location.search).get('folder') || '';
 
@@ -877,6 +1094,13 @@ function copySite() { copy(siteUrl); }
 function copyFolder(name) { copy(`${siteUrl}?folder=${name}`); }
 
 loadList();
+// HTTP 兼容模式下提前把解密线程池建好并派生一次密钥（约 2s，全程只一次），
+// 用户点「打包下载」时就不用干等；原生引擎用不上线程池，跳过。
+if (!FBCrypto.native) {
+  const warm = () => getDecryptPool();
+  if ('requestIdleCallback' in window) requestIdleCallback(warm, { timeout: 5000 });
+  else setTimeout(warm, 2000);
+}
 </script>
 </body>
 </html>

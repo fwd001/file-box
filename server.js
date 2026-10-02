@@ -231,6 +231,60 @@ app.get('/api/download/:folder/:file', (req, res) => {
   res.download(fp, file);
 });
 
+// ---- 归档下载：把整个目录的密文拼成一条流（纯聚合，不压缩） ----
+// 帧格式：[2B 名长][文件名 UTF-8][8B 数据长(大端)][数据]
+// manifest.enc 放在最前，客户端先解出真实文件名，再按序还原其余文件
+app.get('/api/archive/:folder', async (req, res) => {
+  const folder = safeName(req.params.folder);
+  const dir = path.join(UPLOAD_DIR, folder);
+  if (!folder || dir.indexOf(UPLOAD_DIR + path.sep) !== 0) {
+    return res.status(400).json({ error: '目录名无效' });
+  }
+  let parts;
+  try {
+    parts = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isFile())
+      .map((d) => ({ name: d.name, size: fs.statSync(path.join(dir, d.name)).size }));
+  } catch {
+    return res.status(404).json({ error: '目录不存在' });
+  }
+  if (!parts.length) return res.status(404).json({ error: '目录为空' });
+  parts.sort((a, b) =>
+    a.name === MANIFEST ? -1 : b.name === MANIFEST ? 1 : a.name.localeCompare(b.name));
+
+  const total = parts.reduce((s, p) => s + 10 + Buffer.byteLength(p.name) + p.size, 0);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Length', String(total));
+  res.setHeader('Cache-Control', 'no-store');
+
+  let body = null; // 当前正在读的文件流，客户端断开时要关掉
+  res.on('close', () => body && body.destroy());
+  const write = (b) =>
+    res.write(b) ? Promise.resolve(true) : new Promise((r) => res.once('drain', () => r(!res.writableEnded)));
+
+  try {
+    for (const p of parts) {
+      const nameB = Buffer.from(p.name, 'utf8');
+      const head = Buffer.alloc(10 + nameB.length);
+      head.writeUInt16BE(nameB.length, 0);
+      head.writeBigUInt64BE(BigInt(p.size), 2);
+      nameB.copy(head, 10);
+      if (!(await write(head))) return;
+      body = fs.createReadStream(path.join(dir, p.name), { highWaterMark: 1024 * 1024 });
+      for await (const chunk of body) if (!(await write(chunk))) break;
+      body.destroy();
+      body = null;
+      if (res.writableEnded) return;
+    }
+    res.end();
+  } catch {
+    if (body) body.destroy();
+    if (!res.headersSent) res.status(500).json({ error: '打包失败' });
+    else res.destroy();
+  }
+});
+
 // ---- 前端静态页 ----
 app.use(express.static(path.join(__dirname, 'public')));
 

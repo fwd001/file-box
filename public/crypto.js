@@ -334,6 +334,8 @@
   // ================= 统一 API =================
   const api = {
     engine: hasNative ? 'native' : 'js',
+    /** 当前是否真的走原生硬件加速（可在测试中切换，调用方应读这个而不是 engine） */
+    get native() { return useNative && hasNative; },
     CHUNK: hasNative ? NATIVE_CHUNK : JS_CHUNK,
 
     /** 加密一段数据（单块，适合清单等小数据） */
@@ -367,6 +369,11 @@
       if (pt.length !== len) throw new Error('数据校验失败');
       return pt;
     },
+
+    /** 纯 JS 引擎的 AES 密钥（32B）。解密线程池用它只派生一次再分发共享，
+     *  否则每个线程都要各跑一次 12 万次 PBKDF2（实测每次约 2 秒）。 */
+    async exportJsKey() { return await jsKey(); },
+    importJsKey(u8) { jsKeyPromise = Promise.resolve(u8); },
 
     /** 分块加密整个文件 → 密文 Blob（内存友好，大文件自动分块） */
     async encryptFile(file, onProg) {
