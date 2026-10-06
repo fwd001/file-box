@@ -28,7 +28,7 @@
 │   ├── crypto.js        # 浏览器端加密模块（原生 WebCrypto + 纯 JS 回退）
 │   └── dec-worker.js    # 打包下载的解密线程
 ├── scripts/
-│   └── pack.js          # npm run pack：按白名单收集出 dist 发布包并自校验
+│   └── pack.js          # npm run pack：收应用文件 + 生产依赖闭包，出自包含包并自检
 ├── dist/                # 发布产物（npm run pack 生成，不入库）
 ├── uploads/             # 上传文件（密文）存放处，启动时自动创建
 ├── .certs/              # HTTPS 自签证书，首次启动自动生成
@@ -53,26 +53,38 @@ npm start
 
 启动后浏览器访问：`http://服务器IP:3000`（也支持 `https://服务器IP:3443`，见下文「HTTP 与 HTTPS」）
 
-## 打包（出发布产物）
+## 打包（出自包含发布产物）
 
 ```bash
 npm run pack
-# 产物：dist/file-box-1.0.0.tar.gz（约 40KB / 8 个文件）
-#      dist/file-box/                （同内容的目录，可直接拿去跑）
+# 产物：dist/file-box-1.0.0.tar.gz   1.6 MB（解压后 7.8 MB / 1756 个文件）
+#      dist/file-box/                同内容的目录，可直接跑
 ```
 
-按**白名单**收文件，只含运行必需的代码与配置：
-`server.js`、`public/`（前端 3 个静态文件）、`package.json`、`package-lock.json`、`ecosystem.config.js`、`README.md`。
+**这个包是自包含的**：生产依赖已按 `package-lock.json` 的闭包（95 个包）一起打进去，
+服务器上**不需要再 `npm install`**，解压就能启动。（只有一个是例外：Node.js 运行时本身不在包里，
+目标机仍要有 Node ≥ 18 —— 要连 Node 一起带，就得走容器或单文件打包，那是另一套做法。）
 
-**刻意不进包**（打包脚本会自检，混进去就直接失败退出）：
+包里只有两类东西：
 
-- `node_modules/` —— 生产机上用 `npm install --omit=dev` 现装
-- `uploads/` —— 你的文件数据都在这里
-- `.certs/` —— HTTPS 私钥，每台服务器各自生成
-- `.env`、`*.log`、`.git/`、`dist/`
+- 应用文件 8 个 —— `server.js`、`public/`（前端 3 个静态文件）、`package.json`、
+  `package-lock.json`、`ecosystem.config.js`、`README.md`
+- `node_modules/` —— 生产依赖闭包，按锁文件精确收集
 
-> 本项目前端零构建：`public/` 下的文件由 Express 直出，`npm run pack` 只做收集与压缩，
-> 没有编译/混淆步骤，改了前端不需要重新打包（开发时直接刷新页面即可）。
+**刻意不进包**（打包脚本逐条自检，违反就直接失败退出，不会出一个跑不起来的包）：
+
+- `uploads/` —— 你的文件数据都在这里；`.certs/` —— HTTPS 私钥，每台服务器各自生成
+- `.env`、`*.log`、`.git/`、`scripts/`、`dist/`
+- dev 依赖，以及 npm 的账本文件与按平台生成的 `.bin` 启动器
+
+> ⚠️ **一个前提**：带 `node_modules` 跨机器跑，成立的条件是依赖全是纯 JS。
+> 当前三个依赖（express / multer / selfsigned）及其 95 个传递依赖都没有原生二进制、
+> install 脚本或 os/cpu 限定，所以从 Windows 打包带到 Linux 可用 —— 打包脚本每次都会重新检查这一点，
+> 将来若引入了带 `.node` 二进制的依赖，打包会直接失败并提示改在目标系统上打包。
+
+> 本项目前端零构建：`public/` 下的文件由 Express 直出，没有编译/混淆步骤，
+> 改了前端不用重新打包（开发时刷新页面即可）；但**改了 `package.json` 的依赖**，
+> 要先 `npm install` 再 `npm run pack`，包里才是新的依赖。
 
 ## 生产部署（跑 dist）
 
@@ -81,13 +93,12 @@ npm run pack
 npm run pack
 scp dist/file-box-1.0.0.tar.gz user@server:/tmp/
 
-# 2. 服务器上解压到部署目录
+# 2. 服务器上解压到部署目录（不需要 npm install）
 mkdir -p /opt/file-box
 tar -xf /tmp/file-box-1.0.0.tar.gz -C /opt/file-box --strip-components=1
 
-# 3. 装生产依赖并启动
+# 3. 启动
 cd /opt/file-box
-npm install --omit=dev
 pm2 start ecosystem.config.js
 pm2 save
 
@@ -106,7 +117,7 @@ curl -s http://127.0.0.1:4444/api/list | head -c 200
 # 升级：先备份数据，再解压覆盖，最后重启
 tar -czf /tmp/uploads-$(date +%F).tar.gz -C /opt/file-box uploads
 tar -xf /tmp/file-box-<新版本>.tar.gz -C /opt/file-box --strip-components=1
-cd /opt/file-box && npm install --omit=dev && pm2 restart file-box
+cd /opt/file-box && pm2 restart file-box   # 依赖已在包里，不用 npm install
 
 # 回滚：用旧版本包再覆盖一次即可（uploads/ 不受影响）
 tar -xf /tmp/file-box-<旧版本>.tar.gz -C /opt/file-box --strip-components=1
