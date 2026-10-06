@@ -200,7 +200,7 @@ if (JSON.stringify(inTar) !== JSON.stringify(want)) {
 
 const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
 const appFiles = staged.filter((f) => !f.startsWith('node_modules/'));
-console.log(`[打包] dist/${TARBALL_NAME}  ${mb(fs.statSync(TARBALL).size)}（解压后 ${mb(sizeOf(STAGE))}，共 ${staged.length} 个文件）`);
+console.log(`[打包] dist/${TARBALL_NAME}  ${mb(fs.statSync(TARBALL).size)}（内含 ${staged.length} 个文件，文件总大小 ${mb(sizeOf(STAGE))}；小文件多，解压后占盘会更大一些）`);
 console.log(`[打包]   应用文件 ${appFiles.length} 个：${appFiles.join(', ')}`);
 console.log(`[打包]   生产依赖 ${prodDirs.length} 个包 / ${stageDepCount} 个文件（按锁文件闭包精确收集${devOnly.length ? `，已剔除 ${devOnly.length} 个 dev 包` : '；本仓库无 dev 依赖'}）`);
 console.log('[打包] 自检通过：无数据/私钥/脚本泄漏、闭包完整、文件数一致、脱离仓库可解析、tar 条目一致');

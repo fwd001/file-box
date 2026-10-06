@@ -57,7 +57,8 @@ npm start
 
 ```bash
 npm run pack
-# 产物：dist/file-box-1.0.0.tar.gz   1.6 MB（解压后 7.8 MB / 1756 个文件）
+# 产物：dist/file-box-1.0.0.tar.gz   1.6 MB（内含 1756 个文件，文件总大小 7.8 MB；
+#      因为小文件多，解压后实际占盘约 12 MB）
 #      dist/file-box/                同内容的目录，可直接跑
 ```
 
